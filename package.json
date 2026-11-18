@@ -1,0 +1,86 @@
+{
+  "name": "antigravity-task-overlay",
+  "displayName": "Antigravity Task Overlay",
+  "description": "Floating real-time task monitor & control panel untuk Antigravity IDE dan VS Code. Otomatis berjalan saat IDE dibuka dan tertutup saat IDE ditutup.",
+  "version": "1.0.0",
+  "publisher": "antigravity-tools",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:antigravityTaskOverlay.controlPanel"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "antigravity-task-overlay",
+          "title": "Antigravity Task Overlay",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "antigravity-task-overlay": [
+        {
+          "type": "webview",
+          "id": "antigravityTaskOverlay.controlPanel",
+          "name": "Kontrol & Konfigurasi"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "antigravityTaskOverlay.start",
+        "title": "Task Overlay: Jalankan Aplikasi"
+      },
+      {
+        "command": "antigravityTaskOverlay.stop",
+        "title": "Task Overlay: Hentikan Aplikasi"
+      },
+      {
+        "command": "antigravityTaskOverlay.restart",
+        "title": "Task Overlay: Restart Aplikasi"
+      },
+      {
+        "command": "antigravityTaskOverlay.resetPosition",
+        "title": "Task Overlay: Reset Posisi ke Kanan Atas"
+      },
+      {
+        "command": "antigravityTaskOverlay.openPanel",
+        "title": "Task Overlay: Buka Panel Konfigurasi"
+      }
+    ],
+    "configuration": {
+      "title": "Antigravity Task Overlay",
+      "properties": {
+        "antigravityTaskOverlay.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Jalankan aplikasi Task Overlay secara otomatis saat IDE dibuka."
+        },
+        "antigravityTaskOverlay.autoCloseWithIde": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tutup aplikasi Task Overlay secara otomatis saat IDE ditutup."
+        },
+        "antigravityTaskOverlay.appDirectory": {
+          "type": "string",
+          "default": "d:\\Task Overlay",
+          "description": "Lokasi direktori utama aplikasi Python Task Overlay."
+        },
+        "antigravityTaskOverlay.pythonExecutable": {
+          "type": "string",
+          "default": "pythonw",
+          "description": "Path atau nama executable Python untuk menjalankan Task Overlay tanpa jendela terminal (default: pythonw)."
+        }
+      }
+    }
+  }
+}
+

@@ -1,0 +1,21 @@
+{
+  "x": 20,
+  "y": 30,
+  "width": 560,
+  "expanded_height": 380,
+  "auto_start": true,
+  "auto_close_with_ide": true,
+  "always_on_top": true,
+  "window_opacity": 100,
+  "show_quota_ring": true,
+  "show_duration_timer": true,
+  "show_model_badge": true,
+  "show_diff_stats": true,
+  "show_bg_process": true,
+  "show_completion_summary": true,
+  "marquee_speed": 6,
+  "model_badge_duration_ms": 4500,
+  "summary_duration_ms": 11500,
+  "cmd_glance_duration_ms": 5500,
+  "poll_interval_active_ms": 320
+}
