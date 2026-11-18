@@ -71,13 +71,18 @@
         },
         "antigravityTaskOverlay.appDirectory": {
           "type": "string",
-          "default": "d:\\Task Overlay",
-          "description": "Lokasi direktori utama aplikasi Python Task Overlay."
+          "default": "",
+          "description": "Opsional: Lokasi direktori kustom aplikasi Python Task Overlay. Kosongkan untuk memakai aplikasi bawaan di dalam ekstensi."
         },
         "antigravityTaskOverlay.pythonExecutable": {
           "type": "string",
-          "default": "pythonw",
-          "description": "Path atau nama executable Python untuk menjalankan Task Overlay tanpa jendela terminal (default: pythonw)."
+          "default": "",
+          "description": "Opsional: Path executable Python kustom. Kosongkan untuk deteksi otomatis dan auto-setup PyQt6."
+        },
+        "antigravityTaskOverlay.autoSetupEnvironment": {
+          "type": "boolean",
+          "default": true,
+          "description": "Otomatis membuat virtual environment dan memasang PyQt6 jika Python sistem belum memiliki PyQt6."
         }
       }
     }

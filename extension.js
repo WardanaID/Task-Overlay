@@ -1,13 +1,14 @@
 const vscode = require("vscode");
 const cp = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const DEFAULT_CONFIG = {
   x: 1400,
   y: 30,
-  width: 390,
-  expanded_height: 350,
+  width: 560,
+  expanded_height: 380,
   auto_start: true,
   auto_close_with_ide: true,
   always_on_top: true,
@@ -29,25 +30,50 @@ let overlayChildProcess = null;
 let statusBarItem = null;
 let sidebarProvider = null;
 let statusPollTimer = null;
+let cachedRuntime = null;
+let setupPromise = null;
 
 function resolveAppDir() {
   const vsCfg = vscode.workspace.getConfiguration("antigravityTaskOverlay");
-  const configuredDir = vsCfg.get("appDirectory", "d:\\Task Overlay");
+  const configuredDir = (vsCfg.get("appDirectory", "") || "").trim();
   if (configuredDir && fs.existsSync(path.join(configuredDir, "main.py"))) {
     return configuredDir;
+  }
+  const bundledPythonDir = path.join(__dirname, "python");
+  if (fs.existsSync(path.join(bundledPythonDir, "main.py"))) {
+    return bundledPythonDir;
   }
   if (fs.existsSync(path.join(__dirname, "main.py"))) {
     return __dirname;
   }
-  return "d:\\Task Overlay";
+  return bundledPythonDir;
+}
+
+function getDataDir() {
+  const envDir = (process.env.TASK_OVERLAY_DATA_DIR || "").trim();
+  const dataDir = envDir || path.join(os.homedir(), ".antigravity-task-overlay");
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  // Migrasi satu kali config.json lama dari appDir jika dataDir masih kosong
+  const targetCfg = path.join(dataDir, "config.json");
+  if (!fs.existsSync(targetCfg)) {
+    const legacyCfg = path.join(resolveAppDir(), "config.json");
+    if (fs.existsSync(legacyCfg)) {
+      try {
+        fs.copyFileSync(legacyCfg, targetCfg);
+      } catch (_) {}
+    }
+  }
+  return dataDir;
 }
 
 function getConfigPath() {
-  return path.join(resolveAppDir(), "config.json");
+  return path.join(getDataDir(), "config.json");
 }
 
 function getPidPath() {
-  return path.join(resolveAppDir(), "overlay.pid");
+  return path.join(getDataDir(), "overlay.pid");
 }
 
 function readOverlayConfig() {
@@ -105,16 +131,239 @@ function getRunningOverlayPid() {
   return null;
 }
 
-function findPythonExecutable(preferWindowless = true) {
-  const vsCfg = vscode.workspace.getConfiguration("antigravityTaskOverlay");
-  const customExec = vsCfg.get("pythonExecutable", "");
-  if (customExec && customExec !== "pythonw") {
-    return customExec;
-  }
-  return preferWindowless ? "pythonw" : "python";
+function execFileAsync(command, args, options = {}) {
+  return new Promise((resolve) => {
+    cp.execFile(
+      command,
+      args,
+      { windowsHide: true, timeout: 10000, ...options },
+      (error, stdout, stderr) => {
+        resolve({
+          ok: !error,
+          stdout: (stdout || "").trim(),
+          stderr: (stderr || "").trim(),
+          error
+        });
+      }
+    );
+  });
 }
 
-function startOverlay(silent = false) {
+async function canImportPyQt6(command, prefixArgs = []) {
+  const res = await execFileAsync(command, [...prefixArgs, "-c", "import PyQt6"], { timeout: 7000 });
+  return res.ok;
+}
+
+async function resolveWindowlessExec(command, prefixArgs = []) {
+  const res = await execFileAsync(
+    command,
+    [...prefixArgs, "-c", "import sys; print(sys.executable)"],
+    { timeout: 5000 }
+  );
+  const sysExe = res.ok && res.stdout ? res.stdout.split(/\r?\n/)[0].trim() : command;
+  if (process.platform === "win32" && sysExe.toLowerCase().endsWith("python.exe")) {
+    const pywPath = path.join(path.dirname(sysExe), "pythonw.exe");
+    if (fs.existsSync(pywPath)) {
+      return { runExec: pywPath, cliExec: sysExe, prefixArgs: [] };
+    }
+  }
+  return { runExec: sysExe, cliExec: sysExe, prefixArgs: res.ok ? [] : prefixArgs };
+}
+
+function getManagedVenvPaths() {
+  const venvDir = path.join(getDataDir(), "venv");
+  if (process.platform === "win32") {
+    const cliExec = path.join(venvDir, "Scripts", "python.exe");
+    const pywExec = path.join(venvDir, "Scripts", "pythonw.exe");
+    return {
+      venvDir,
+      cliExec,
+      runExec: fs.existsSync(pywExec) ? pywExec : cliExec
+    };
+  }
+  const py3 = path.join(venvDir, "bin", "python3");
+  const py = path.join(venvDir, "bin", "python");
+  const cliExec = fs.existsSync(py3) ? py3 : py;
+  return { venvDir, cliExec, runExec: cliExec };
+}
+
+async function findSystemPython() {
+  const candidates = process.platform === "win32"
+    ? [
+        { cmd: "python", args: [] },
+        { cmd: "py", args: ["-3"] },
+        { cmd: "python3", args: [] }
+      ]
+    : [
+        { cmd: "python3", args: [] },
+        { cmd: "python", args: [] }
+      ];
+
+  if (process.platform === "win32") {
+    const localPyRoot = path.join(process.env.LOCALAPPDATA || "", "Programs", "Python");
+    if (fs.existsSync(localPyRoot)) {
+      try {
+        for (const entry of fs.readdirSync(localPyRoot)) {
+          const exe = path.join(localPyRoot, entry, "python.exe");
+          if (fs.existsSync(exe)) {
+            candidates.push({ cmd: exe, args: [] });
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  for (const cand of candidates) {
+    const res = await execFileAsync(
+      cand.cmd,
+      [...cand.args, "-c", "import sys; assert sys.version_info >= (3, 9)"],
+      { timeout: 5000 }
+    );
+    if (res.ok) {
+      return cand;
+    }
+  }
+  return null;
+}
+
+async function ensureVenvWithPyQt6(sysPy, appDir) {
+  if (setupPromise) {
+    return setupPromise;
+  }
+
+  setupPromise = vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Antigravity Task Overlay",
+      cancellable: false
+    },
+    async (progress) => {
+      const venv = getManagedVenvPaths();
+      if (!fs.existsSync(venv.cliExec)) {
+        progress.report({ message: "Membuat virtual environment Python..." });
+        const venvRes = await execFileAsync(
+          sysPy.cmd,
+          [...sysPy.args, "-m", "venv", venv.venvDir],
+          { timeout: 60000 }
+        );
+        if (!venvRes.ok) {
+          throw new Error(venvRes.stderr || venvRes.error?.message || "Gagal membuat venv Python.");
+        }
+      }
+
+      const reqPath = path.join(appDir, "requirements.txt");
+      const pipArgs = fs.existsSync(reqPath)
+        ? ["-m", "pip", "install", "--disable-pip-version-check", "-r", reqPath]
+        : ["-m", "pip", "install", "--disable-pip-version-check", "PyQt6>=6.5.0"];
+
+      progress.report({ message: "Memasang PyQt6 (hanya saat pertama kali dijalankan)..." });
+      const pipRes = await execFileAsync(venv.cliExec, pipArgs, { timeout: 180000 });
+      if (!pipRes.ok) {
+        throw new Error(pipRes.stderr || pipRes.error?.message || "Gagal memasang PyQt6 via pip.");
+      }
+
+      if (!(await canImportPyQt6(venv.cliExec))) {
+        throw new Error("PyQt6 berhasil dipasang tetapi gagal diimpor.");
+      }
+
+      const refreshed = getManagedVenvPaths();
+      return { runExec: refreshed.runExec, cliExec: refreshed.cliExec, prefixArgs: [] };
+    }
+  );
+
+  try {
+    return await setupPromise;
+  } finally {
+    setupPromise = null;
+  }
+}
+
+async function resolvePythonRuntime(appDir, interactive = true) {
+  if (cachedRuntime && fs.existsSync(cachedRuntime.runExec)) {
+    return cachedRuntime;
+  }
+
+  const vsCfg = vscode.workspace.getConfiguration("antigravityTaskOverlay");
+  const customExec = (vsCfg.get("pythonExecutable", "") || "").trim();
+  const autoSetup = vsCfg.get("autoSetupEnvironment", true);
+
+  // 1. Jika user mengatur executable Python kustom secara eksplisit
+  if (customExec && customExec !== "pythonw") {
+    if (await canImportPyQt6(customExec)) {
+      cachedRuntime = await resolveWindowlessExec(customExec);
+      return cachedRuntime;
+    }
+    if (interactive) {
+      const action = await vscode.window.showErrorMessage(
+        `Executable Python kustom "${customExec}" tidak ditemukan atau belum memiliki PyQt6.`,
+        "Buka Pengaturan"
+      );
+      if (action === "Buka Pengaturan") {
+        vscode.commands.executeCommand("workbench.action.openSettings", "antigravityTaskOverlay.pythonExecutable");
+      }
+    }
+    return null;
+  }
+
+  // 2. Cek managed venv di ~/.antigravity-task-overlay/venv
+  const venv = getManagedVenvPaths();
+  if (fs.existsSync(venv.cliExec) && (await canImportPyQt6(venv.cliExec))) {
+    cachedRuntime = { runExec: venv.runExec, cliExec: venv.cliExec, prefixArgs: [] };
+    return cachedRuntime;
+  }
+
+  // 3. Cek Python sistem
+  const sysPy = await findSystemPython();
+  if (!sysPy) {
+    if (interactive) {
+      const choice = await vscode.window.showErrorMessage(
+        "Python 3 (>= 3.9) tidak ditemukan. Antigravity Task Overlay memerlukan Python 3 untuk berjalan.",
+        "Download Python",
+        "Pengaturan"
+      );
+      if (choice === "Download Python") {
+        vscode.env.openExternal(vscode.Uri.parse("https://www.python.org/downloads/"));
+      } else if (choice === "Pengaturan") {
+        vscode.commands.executeCommand("workbench.action.openSettings", "antigravityTaskOverlay.pythonExecutable");
+      }
+    }
+    return null;
+  }
+
+  // Jika Python sistem sudah punya PyQt6, pakai langsung tanpa perlu bikin venv
+  if (await canImportPyQt6(sysPy.cmd, sysPy.args)) {
+    cachedRuntime = await resolveWindowlessExec(sysPy.cmd, sysPy.args);
+    return cachedRuntime;
+  }
+
+  // 4. Auto-setup venv + PyQt6
+  if (!autoSetup) {
+    if (interactive) {
+      vscode.window.showErrorMessage(
+        "PyQt6 belum terpasang. Jalankan `pip install PyQt6` atau aktifkan setting `antigravityTaskOverlay.autoSetupEnvironment`."
+      );
+    }
+    return null;
+  }
+
+  try {
+    cachedRuntime = await ensureVenvWithPyQt6(sysPy, appDir);
+    return cachedRuntime;
+  } catch (err) {
+    if (interactive) {
+      const retry = await vscode.window.showErrorMessage(
+        `Gagal menyiapkan environment PyQt6: ${err.message}`,
+        "Coba Lagi"
+      );
+      if (retry === "Coba Lagi") {
+        return resolvePythonRuntime(appDir, true);
+      }
+    }
+    return null;
+  }
+}
+
+async function startOverlay(silent = false) {
   const appDir = resolveAppDir();
   const mainPy = path.join(appDir, "main.py");
   if (!fs.existsSync(mainPy)) {
@@ -131,35 +380,31 @@ function startOverlay(silent = false) {
     return;
   }
 
+  const runtime = await resolvePythonRuntime(appDir, true);
+  if (!runtime) {
+    updateStatusUI();
+    return;
+  }
+
+  const dataDir = getDataDir();
   const cfg = readOverlayConfig();
-  const args = [mainPy];
+  const args = [...runtime.prefixArgs, mainPy, "--data-dir", dataDir];
   if (cfg.auto_close_with_ide !== false) {
     args.push("--parent-pid", String(process.pid));
   }
 
-  const pyExec = findPythonExecutable(true);
   try {
-    const child = cp.spawn(pyExec, args, {
+    const child = cp.spawn(runtime.runExec, args, {
       cwd: appDir,
       detached: true,
       stdio: "ignore",
-      windowsHide: true
+      windowsHide: true,
+      env: { ...process.env, TASK_OVERLAY_DATA_DIR: dataDir }
     });
 
-    child.on("error", () => {
-      // Fallback ke 'python' jika 'pythonw' tidak ditemukan di PATH
-      try {
-        const fallbackChild = cp.spawn("python", args, {
-          cwd: appDir,
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true
-        });
-        fallbackChild.unref();
-        overlayChildProcess = fallbackChild;
-      } catch (err2) {
-        vscode.window.showErrorMessage(`Gagal menjalankan Task Overlay: ${err2.message}`);
-      }
+    child.on("error", (err) => {
+      cachedRuntime = null;
+      vscode.window.showErrorMessage(`Gagal menjalankan Task Overlay: ${err.message}`);
     });
 
     child.unref();
@@ -179,8 +424,10 @@ function startOverlay(silent = false) {
 
 function stopOverlay(silent = false) {
   const appDir = resolveAppDir();
+  const dataDir = getDataDir();
   const mainPy = path.join(appDir, "main.py");
   const pid = getRunningOverlayPid();
+  const pidFile = getPidPath();
 
   if (pid) {
     try {
@@ -192,18 +439,19 @@ function stopOverlay(silent = false) {
     } catch (_) {}
   }
 
-  if (fs.existsSync(mainPy)) {
+  if (fs.existsSync(mainPy) && (pid || fs.existsSync(pidFile))) {
+    const stopExec = (cachedRuntime && cachedRuntime.cliExec) || "python";
     try {
-      cp.spawnSync("python", [mainPy, "--stop"], {
+      cp.spawnSync(stopExec, [mainPy, "--stop", "--data-dir", dataDir], {
         cwd: appDir,
         stdio: "ignore",
         windowsHide: true,
-        timeout: 2500
+        timeout: 2500,
+        env: { ...process.env, TASK_OVERLAY_DATA_DIR: dataDir }
       });
     } catch (_) {}
   }
 
-  const pidFile = getPidPath();
   if (fs.existsSync(pidFile)) {
     try {
       fs.unlinkSync(pidFile);

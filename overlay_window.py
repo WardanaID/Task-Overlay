@@ -22,8 +22,9 @@ from animated_task_label import AnimatedTaskLabel
 from model_badge import AnimatedModelBadge
 from icons import get_svg_icon, get_svg_pixmap
 from styles import DARK_THEME_QSS
+from paths import get_config_path, log_exception
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+CONFIG_FILE = get_config_path()
 
 # Konfigurasi Dimensi Dinamis (Mendukung 2, 3, hingga 4 baris + Resizable Width/Height)
 BASE_PILL_HEIGHT = 38          # Tinggi dasar untuk 2 baris (Row 1 Header + Row 2 Task)
@@ -1003,14 +1004,7 @@ class TaskOverlayWindow(QWidget):
                 self._completion_seq_active = True
                 self.completion_summary_timer.start(2600)
         except Exception:
-            import traceback
-            err_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "err.log")
-            try:
-                with open(err_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n[{datetime.datetime.now()}] Exception in start_completion_sequence:\n")
-                    traceback.print_exc(file=f)
-            except Exception:
-                pass
+            log_exception("Exception in start_completion_sequence")
 
     def _show_completion_summary(self):
         try:
@@ -1326,14 +1320,7 @@ class TaskOverlayWindow(QWidget):
             if self.poll_timer.interval() != desired_interval:
                 self.poll_timer.setInterval(desired_interval)
         except Exception:
-            import traceback
-            err_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "err.log")
-            try:
-                with open(err_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n[{datetime.datetime.now()}] Exception in on_poll_tick:\n")
-                    traceback.print_exc(file=f)
-            except Exception:
-                pass
+            log_exception("Exception in on_poll_tick")
 
     def refresh_visible_log_items(self):
         for i in range(self.log_box.count()):

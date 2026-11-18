@@ -157,20 +157,28 @@ Icon SVG vektor tajam (*Lucide / Feather style*), tanpa emoji, mencakup:
 
 ---
 
-## Cara Menggunakan
+## Cara Menggunakan & Distribusi
 
-### Opsi 1: Melalui Ekstensi Antigravity IDE / VS Code (Rekomendasi Utama)
+### Opsi 1: Instalasi dari File `.vsix` (Untuk Pengguna Umum)
 
-1. Jalankan skrip instalasi ekstensi (hanya perlu sekali):
-   ```bash
-   python install_extension.py
-   ```
-   Skrip ini memasang ekstensi secara langsung ke `~/.antigravity/extensions` dan `~/.vscode/extensions`.
-2. Muat ulang jendela IDE (`Ctrl+Shift+P` -> `Developer: Reload Window`).
-3. Aplikasi Task Overlay akan **otomatis berjalan setiap kali IDE dibuka** dan **otomatis tertutup saat IDE ditutup**.
-4. Klik ikon **Antigravity Task Overlay** di Activity Bar kiri IDE (atau klik status `Task Overlay: Aktif` di Status Bar bawah) untuk mengatur seluruh konfigurasi aplikasi secara langsung.
+1. Pastikan **Python 3 (>= 3.9)** sudah terpasang di sistem.
+2. Pasang file `antigravity-task-overlay-1.0.0.vsix` di Antigravity IDE / VS Code melalui menu **Extensions -> `...` -> Install from VSIX...** (atau jalankan CLI `antigravity-ide --install-extension antigravity-task-overlay-1.0.0.vsix`).
+3. Saat ekstensi pertama kali dijalankan, ekstensi akan otomatis memeriksa `PyQt6`. Jika belum tersedia di Python sistem, ekstensi akan membuat virtual environment di `~/.antigravity-task-overlay/venv` dan memasang `PyQt6` secara otomatis.
+4. Konfigurasi pengguna (`config.json`), PID, dan log error (`err.log`) disimpan secara persisten di `~/.antigravity-task-overlay/` sehingga tidak hilang saat ekstensi diperbarui.
 
-### Opsi 2: Menjalankan Mandiri (Standalone)
+### Opsi 2: Build `.vsix` & Install Lokal (Untuk Developer)
+
+- Hanya membangun file `.vsix` untuk release:
+  ```bash
+  python install_extension.py --pack-only
+  ```
+- Membangun `.vsix` sekaligus memasangnya ke folder ekstensi lokal (`~/.antigravity-ide/extensions`, `~/.antigravity/extensions`, `~/.vscode/extensions`):
+  ```bash
+  python install_extension.py
+  ```
+  Lalu muat ulang jendela IDE (`Ctrl+Shift+P` -> `Developer: Reload Window`).
+
+### Opsi 3: Menjalankan Mandiri (Standalone)
 
 - Mode tanpa jendela terminal: Klik 2x `run_silent.vbs`.
 - Mode console/debugging: Jalankan `python main.py` atau klik 2x `run.bat`.
@@ -183,11 +191,13 @@ Icon SVG vektor tajam (*Lucide / Feather style*), tanpa emoji, mencakup:
 ```
 d:\Task Overlay\
 ├── package.json            # Manifest ekstensi Antigravity IDE / VS Code
-├── extension.js            # Core ekstensi IDE (Lifecycle Auto-Start/Close + Webview Panel)
-├── install_extension.py    # Installer otomatis ke .antigravity/extensions & .vscode/extensions
+├── extension.js            # Core ekstensi IDE (Auto-setup venv, Lifecycle & Webview Panel)
+├── install_extension.py    # Packager VSIX self-contained & installer lokal
+├── requirements.txt        # Dependensi Python (PyQt6)
 ├── media/
 │   └── activity-icon.svg   # Ikon vektor Activity Bar IDE
-├── main.py                 # Entry point aplikasi Python (PID lock + Parent IDE Watchdog)
+├── paths.py                # Resolusi direktori data persisten (~/.antigravity-task-overlay)
+├── main.py                 # Entry point aplikasi Python (PID lock, --stop & Parent Watchdog)
 ├── overlay_window.py       # UI Window PyQt6 (4-Row Dynamic Pill + Live Config Hot-Reload)
 ├── animated_task_label.py  # Task Label dengan Shimmer, Diff (+baris -baris) & Marquee Scroll
 ├── model_badge.py          # Badge Model Animasi (Fade-in saat start/switch model)

@@ -1,3 +1,4 @@
+import argparse
 import os
 import json
 import shutil
@@ -17,11 +18,26 @@ FILES_TO_COPY = [
     "README.md",
 ]
 
+PYTHON_RUNTIME_FILES = [
+    "main.py",
+    "overlay_window.py",
+    "monitor.py",
+    "animated_task_label.py",
+    "model_badge.py",
+    "quota_widget.py",
+    "icons.py",
+    "styles.py",
+    "paths.py",
+    "requirements.txt",
+]
+
 CONTENT_TYPES_XML = """<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension=".json" ContentType="application/json"/>
   <Default Extension=".js" ContentType="application/javascript"/>
   <Default Extension=".md" ContentType="text/markdown"/>
+  <Default Extension=".py" ContentType="text/x-python"/>
+  <Default Extension=".txt" ContentType="text/plain"/>
   <Default Extension=".svg" ContentType="image/svg+xml"/>
   <Default Extension=".vsixmanifest" ContentType="text/xml"/>
 </Types>
@@ -57,17 +73,21 @@ VSIX_MANIFEST_XML = """<?xml version="1.0" encoding="utf-8"?>
 
 
 def build_vsix():
+    missing = [f for f in FILES_TO_COPY + PYTHON_RUNTIME_FILES if not os.path.exists(os.path.join(SRC_DIR, f))]
+    if missing:
+        raise FileNotFoundError(f"File wajib tidak ditemukan: {', '.join(missing)}")
+
     with zipfile.ZipFile(VSIX_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("[Content_Types].xml", CONTENT_TYPES_XML.strip())
         zf.writestr("extension.vsixmanifest", VSIX_MANIFEST_XML.strip())
         for fname in FILES_TO_COPY:
-            fpath = os.path.join(SRC_DIR, fname)
-            if os.path.exists(fpath):
-                zf.write(fpath, f"extension/{fname}")
+            zf.write(os.path.join(SRC_DIR, fname), f"extension/{fname}")
+        for fname in PYTHON_RUNTIME_FILES:
+            zf.write(os.path.join(SRC_DIR, fname), f"extension/python/{fname}")
         svg_path = os.path.join(SRC_DIR, "media", "activity-icon.svg")
         if os.path.exists(svg_path):
             zf.write(svg_path, "extension/media/activity-icon.svg")
-    print(f"[OK] Paket VSIX berhasil dibuat: {VSIX_PATH}")
+    print(f"[OK] Paket VSIX self-contained berhasil dibuat: {VSIX_PATH}")
 
 
 def install_to_ide_root(ide_ext_root: str, ide_name: str):
@@ -75,13 +95,20 @@ def install_to_ide_root(ide_ext_root: str, ide_name: str):
         os.makedirs(ide_ext_root, exist_ok=True)
 
     target_dir = os.path.join(ide_ext_root, EXT_FOLDER_NAME)
+    py_target_dir = os.path.join(target_dir, "python")
     os.makedirs(target_dir, exist_ok=True)
+    os.makedirs(py_target_dir, exist_ok=True)
     os.makedirs(os.path.join(target_dir, "media"), exist_ok=True)
 
     for fname in FILES_TO_COPY:
         src = os.path.join(SRC_DIR, fname)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(target_dir, fname))
+
+    for fname in PYTHON_RUNTIME_FILES:
+        src = os.path.join(SRC_DIR, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(py_target_dir, fname))
 
     src_icon = os.path.join(SRC_DIR, "media", "activity-icon.svg")
     if os.path.exists(src_icon):
@@ -155,7 +182,14 @@ def install_to_ide_root(ide_ext_root: str, ide_name: str):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Build dan pasang ekstensi Antigravity Task Overlay")
+    parser.add_argument("--pack-only", action="store_true", help="Hanya membuat file .vsix tanpa memasang ke IDE lokal")
+    args = parser.parse_args()
+
     build_vsix()
+    if args.pack_only:
+        return
+
     user_home = os.path.expanduser("~")
 
     # 1. Pasang via CLI resmi Antigravity IDE jika tersedia

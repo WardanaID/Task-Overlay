@@ -1,18 +1,12 @@
 import sys
 import os
 import signal
-import datetime
 import argparse
 
 # Fix High DPI scaling di Windows
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, QTimer
-from overlay_window import TaskOverlayWindow
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PID_FILE = os.path.join(APP_DIR, "overlay.pid")
+from paths import get_pid_path, log_exception
 
 
 def excepthook(exc_type, exc_value, exc_tb):
@@ -20,35 +14,38 @@ def excepthook(exc_type, exc_value, exc_tb):
     Global exception hook untuk menangkap unhandled exception di PyQt6 event loop
     dan mencatatnya ke err.log agar aplikasi tidak crash tertutup tanpa jejak.
     """
-    import traceback
-    err_path = os.path.join(APP_DIR, "err.log")
-    try:
-        with open(err_path, "a", encoding="utf-8") as f:
-            f.write(f"\n[{datetime.datetime.now()}] Unhandled Qt Exception:\n")
-            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
-    except Exception:
-        pass
+    log_exception("Unhandled Qt Exception", exc_type, exc_value, exc_tb)
 
 
 def is_process_alive(pid: int) -> bool:
     """
-    Mengecek apakah proses dengan PID tertentu masih berjalan di Windows.
+    Mengecek apakah proses dengan PID tertentu masih berjalan.
     """
     if not pid or pid <= 0:
         return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                return False
+            exit_code = ctypes.c_ulong()
+            res = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            ctypes.windll.kernel32.CloseHandle(handle)
+            if not res:
+                return False
+            return exit_code.value == STILL_ACTIVE
+        except Exception:
+            return False
     try:
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-        if not handle:
-            return False
-        exit_code = ctypes.c_ulong()
-        res = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-        ctypes.windll.kernel32.CloseHandle(handle)
-        if not res:
-            return False
-        return exit_code.value == STILL_ACTIVE
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
     except Exception:
         return False
 
@@ -57,37 +54,45 @@ def stop_existing_instance():
     """
     Menghentikan instance overlay lama jika masih berjalan agar tidak terjadi duplikasi jendela.
     """
-    if not os.path.exists(PID_FILE):
+    pid_file = get_pid_path()
+    if not os.path.exists(pid_file):
         return
     try:
-        with open(PID_FILE, "r", encoding="utf-8") as f:
+        with open(pid_file, "r", encoding="utf-8") as f:
             old_pid = int(f.read().strip())
         if old_pid != os.getpid() and is_process_alive(old_pid):
-            import ctypes
-            PROCESS_TERMINATE = 0x0001
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, old_pid)
-            if handle:
-                ctypes.windll.kernel32.TerminateProcess(handle, 0)
-                ctypes.windll.kernel32.CloseHandle(handle)
+            if sys.platform == "win32":
+                import ctypes
+                PROCESS_TERMINATE = 0x0001
+                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, old_pid)
+                if handle:
+                    ctypes.windll.kernel32.TerminateProcess(handle, 0)
+                    ctypes.windll.kernel32.CloseHandle(handle)
+            else:
+                os.kill(old_pid, signal.SIGTERM)
     except Exception:
         pass
 
 
 def write_pid_file():
     try:
-        with open(PID_FILE, "w", encoding="utf-8") as f:
+        with open(get_pid_path(), "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
     except Exception:
         pass
 
 
-def remove_pid_file():
+def remove_pid_file(force: bool = False):
     try:
-        if os.path.exists(PID_FILE):
-            with open(PID_FILE, "r", encoding="utf-8") as f:
+        pid_file = get_pid_path()
+        if os.path.exists(pid_file):
+            if force:
+                os.remove(pid_file)
+                return
+            with open(pid_file, "r", encoding="utf-8") as f:
                 saved_pid = int(f.read().strip())
             if saved_pid == os.getpid():
-                os.remove(PID_FILE)
+                os.remove(pid_file)
     except Exception:
         pass
 
@@ -97,18 +102,33 @@ def main():
 
     parser = argparse.ArgumentParser(description="Antigravity Task Overlay")
     parser.add_argument("--parent-pid", type=int, default=0, help="PID proses IDE induk untuk auto-close")
+    parser.add_argument("--data-dir", type=str, default="", help="Direktori data persisten pengguna")
+    parser.add_argument("--stop", action="store_true", help="Hentikan instance overlay yang sedang berjalan")
     args, unknown = parser.parse_known_args()
+
+    if args.data_dir:
+        os.environ["TASK_OVERLAY_DATA_DIR"] = args.data_dir
+
+    if args.stop:
+        stop_existing_instance()
+        remove_pid_file(force=True)
+        return
+
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QTimer
+    from overlay_window import TaskOverlayWindow
 
     stop_existing_instance()
     write_pid_file()
 
     # Set Windows App User Model ID agar icon dan window taskbar teridentifikasi dengan benar
-    try:
-        import ctypes
-        myappid = 'antigravity.taskoverlay.app.v1'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            myappid = 'antigravity.taskoverlay.app.v1'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
 
     try:
         app = QApplication(sys.argv)
@@ -133,11 +153,7 @@ def main():
 
         sys.exit(app.exec())
     except Exception:
-        import traceback
-        err_path = os.path.join(APP_DIR, "err.log")
-        with open(err_path, "a", encoding="utf-8") as f:
-            f.write(f"\n[{datetime.datetime.now()}] Main Exception:\n")
-            traceback.print_exc(file=f)
+        log_exception("Main Exception")
         remove_pid_file()
         raise
 
